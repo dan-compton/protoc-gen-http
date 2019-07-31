@@ -1,13 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"github.com/gogo/googleapis/google/api"
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	"github.com/gogo/protobuf/protoc-gen-gogo/generator"
 	"github.com/gogo/protobuf/vanity/command"
-	"google.golang.org/genproto/googleapis/api/annotations"
-	"reflect"
+	"log"
 )
 
 type Generator struct {
@@ -28,8 +29,8 @@ func (g *Generator) Init(gg *generator.Generator) {
 	g.Generator = gg
 }
 
-func (p *Generator) Overwrite() {
-	p.overwrite = true
+func (g *Generator) Overwrite() {
+	g.overwrite = true
 }
 
 func (g *Generator) Generate(file *generator.FileDescriptor) {
@@ -37,6 +38,7 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 	g.PluginImports = generator.NewPluginImports(g.Generator)
 
 	httpPkg := g.NewImport("net/http")
+	jsonPkg := g.NewImport("encoding/json")
 	//fmtPkg := g.NewImport("fmt")
 	ctxPkg := g.NewImport("context")
 
@@ -45,23 +47,27 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 
 		// type HelloHttpClient struct {
 		//   client net_http.Client
+		//   baseURL string
 		// }
 		g.P("type ", svcName, " struct {")
 		g.In()
 		g.P("client ", httpPkg.Use(), ".Client")
+		g.P("baseURL string")
 		g.Out()
 		g.P("}")
 
 		// func NewHelloHttpClient() {
 		//   return &HelloHttpClient{
 		//     client: net_http.Client{},
+		//	   baseURL: baseURL,
 		//   }
 		// }
-		g.P("func New", svcName, "() *", svcName, "{")
+		g.P("func New", svcName, "(baseURL string) *", svcName, "{")
 		g.In()
 		g.P("return &", svcName, "{")
 		g.In()
 		g.P("client: ", httpPkg.Use(), ".Client{},")
+		g.P("baseURL: baseURL,")
 		g.Out()
 		g.P("}")
 		g.Out()
@@ -73,33 +79,85 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 			// }
 			in := g.TypeName(g.ObjectNamed(method.GetInputType()))
 			out := g.TypeName(g.ObjectNamed(method.GetOutputType()))
-
-			g.P("// ", g.GetMethodType(method))
-
+			endpoint, err := GetMethodType(method)
+			if err != nil {
+				log.Fatal(err)
+			}
 			g.P("func (c *", svcName, ") ", method.Name, "(ctx ", ctxPkg.Use(), ".Context, in *", in, ") (*", out, ", error) {")
 			g.In()
 			g.P("out := new(", out, ")")
-			g.P("request, err := ", httpPkg.Use(), ".NewRequest()")
-			g.P("return nil, nil")
+			g.P(fmt.Sprintf(`request, err := %s.NewRequest(%s.%s, c.baseURL+"%s", nil)`, httpPkg.Use(), httpPkg.Use(), endpoint.Method, endpoint.Path))
+			g.checkErr()
+			g.P("response, err := c.client.Do(request)")
+			g.checkErr()
+			g.P("err = ", jsonPkg.Use(), ".NewDecoder(response.Body).Decode(out)")
+			g.checkErr()
+			g.P("return out, nil")
 			g.Out()
 			g.P("}")
 		}
 	}
 }
+func (g *Generator) checkErr() {
+	g.P("if err != nil {")
+	g.In()
+	g.P("return nil, err")
+	g.Out()
+	g.P("}")
+}
 
-func (g *Generator) GetMethodType(m *descriptor.MethodDescriptorProto) string {
-	ext, _ := proto.GetExtension(m.Options, &proto.ExtensionDesc{
-		ExtendedType:  (*descriptor.MethodOptions)(nil),
-		ExtensionType: (*annotations.HttpRule)(nil),
-		Field:         72295728,
-		Name:          "google.api.http",
-		Tag:           "bytes,72295728,opt,name=http",
-		Filename:      "google/api/annotations.proto",
-	})
+func GetMethodType(m *descriptor.MethodDescriptorProto) (Endpoint, error) {
+	if !proto.HasExtension(m.Options, api.E_Http) {
+		return Endpoint{}, errors.New("no extension")
+	}
+	ext, err := proto.GetExtension(m.Options, api.E_Http)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	rule, ok := ext.(*api.HttpRule)
+	if !ok {
+		return Endpoint{}, errors.New("no http rule")
+	}
+	return GetEndpoint(rule), err
+}
 
-	rule := ext.(*annotations.HttpRule)
+type Endpoint struct {
+	Method string
+	Path   string
+}
 
-	return fmt.Sprintf("%+v, %+v\n", string(rule.XXX_unrecognized), reflect.TypeOf(rule.Pattern))
+func GetEndpoint(opts *api.HttpRule) Endpoint {
+	if opts == nil {
+		return Endpoint{}
+	}
+	switch opt := opts.GetPattern().(type) {
+	case *api.HttpRule_Get:
+		return Endpoint{
+			Method: "MethodGet",
+			Path:   opt.Get,
+		}
+	case *api.HttpRule_Put:
+		return Endpoint{
+			Method: "MethodPut",
+			Path:   opt.Put,
+		}
+	case *api.HttpRule_Post:
+		return Endpoint{
+			Method: "MethodPost",
+			Path:   opt.Post,
+		}
+	case *api.HttpRule_Delete:
+		return Endpoint{
+			Method: "MethodDelete",
+			Path:   opt.Delete,
+		}
+	case *api.HttpRule_Patch:
+		return Endpoint{
+			Method: "MethodPatch",
+			Path:   opt.Patch,
+		}
+	}
+	return Endpoint{}
 }
 
 func init() {
