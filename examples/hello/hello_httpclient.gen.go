@@ -29,7 +29,7 @@ func NewGreeterHttpClient(baseURL string) *GreeterHttpClient {
 		baseURL: baseURL,
 	}
 }
-func (c *GreeterHttpClient) SayHello(ctx context.Context, in *HelloRequest) (*HelloReply, error) {
+func (c *GreeterHttpClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloReply, error) {
 	out := new(HelloReply)
 	request, err := net_http.NewRequest("GET", c.baseURL+"/hello", nil)
 	if err != nil {

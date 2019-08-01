@@ -86,7 +86,7 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			g.P("func (c *", svcName, ") ", method.Name, "(ctx ", ctxPkg.Use(), ".Context, in *", in, ") (*", out, ", error) {")
+			g.P("func (c *", svcName, ") ", method.Name, "(ctx ", ctxPkg.Use(), ".Context, in *", in, ", opts ...grpc.CallOption) (*", out, ", error) {")
 			g.In()
 			g.P("out := new(", out, ")")
 			g.P(fmt.Sprintf(`request, err := %s.NewRequest("%s", c.baseURL+"%s", nil)`, httpPkg.Use(), endpoint.Method, endpoint.Path))

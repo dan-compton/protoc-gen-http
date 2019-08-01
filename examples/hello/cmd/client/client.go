@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	c := hello.NewGreeterHttpClient("http://localhost:8080")
+	var c hello.GreeterClient = hello.NewGreeterHttpClient("http://localhost:8080")
 
 	out, err := c.SayHello(context.Background(), &hello.HelloRequest{
 		Name: "Peto",
