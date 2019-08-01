@@ -9,6 +9,8 @@ import (
 	"github.com/gogo/protobuf/protoc-gen-gogo/generator"
 	"github.com/gogo/protobuf/vanity/command"
 	"log"
+	"net/http"
+	"strings"
 )
 
 type Generator struct {
@@ -36,7 +38,7 @@ func (g *Generator) Overwrite() {
 func (g *Generator) Generate(file *generator.FileDescriptor) {
 	//proto3 := gogoproto.IsProto3(file.FileDescriptorProto)
 	g.PluginImports = generator.NewPluginImports(g.Generator)
-
+	bytesPkg := g.NewImport("bytes")
 	httpPkg := g.NewImport("net/http")
 	jsonPkg := g.NewImport("encoding/json")
 	//fmtPkg := g.NewImport("fmt")
@@ -80,16 +82,33 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 			in := g.TypeName(g.ObjectNamed(method.GetInputType()))
 			out := g.TypeName(g.ObjectNamed(method.GetOutputType()))
 			endpoint, err := GetMethodType(method)
+			method.GetInputType()
 			if err != nil {
 				log.Fatal(err)
 			}
 			g.P("func (c *", svcName, ") ", method.Name, "(ctx ", ctxPkg.Use(), ".Context, in *", in, ") (*", out, ", error) {")
 			g.In()
 			g.P("out := new(", out, ")")
-			g.P(fmt.Sprintf(`request, err := %s.NewRequest(%s.%s, c.baseURL+"%s", nil)`, httpPkg.Use(), httpPkg.Use(), endpoint.Method, endpoint.Path))
+			g.P(fmt.Sprintf(`request, err := %s.NewRequest("%s", c.baseURL+"%s", nil)`, httpPkg.Use(), endpoint.Method, endpoint.Path))
 			g.checkErr()
+			switch endpoint.Method {
+			case http.MethodGet:
+				fields := g.getFields(in, g.ObjectNamed(method.GetInputType()))
+				if len(fields) > 0 {
+					g.P("q := request.URL.Query()")
+					for _, field := range fields {
+						g.P(`q.Add("`, field.GetJsonName(), `", in.`, strings.Title(field.GetName()), `)`)
+					}
+					g.P("request.URL.RawQuery = q.Encode()")
+				}
+			case http.MethodPost, http.MethodPut, http.MethodPatch:
+				g.P("b, err := ", jsonPkg.Use(), ".Marshal(in)")
+				g.checkErr()
+				g.P("request.Body = ", bytesPkg.Use(), ".NewBuffer(b)")
+			}
 			g.P("response, err := c.client.Do(request)")
 			g.checkErr()
+			g.P("defer response.Body.Close()")
 			g.P("err = ", jsonPkg.Use(), ".NewDecoder(response.Body).Decode(out)")
 			g.checkErr()
 			g.P("return out, nil")
@@ -97,6 +116,15 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 			g.P("}")
 		}
 	}
+}
+
+func (g *Generator) getFields(msgType string, object generator.Object) []*descriptor.FieldDescriptorProto {
+	for _, desc := range object.File().Messages() {
+		if desc.GetName() == msgType {
+			return desc.Field
+		}
+	}
+	return []*descriptor.FieldDescriptorProto{}
 }
 func (g *Generator) checkErr() {
 	g.P("if err != nil {")
@@ -133,27 +161,27 @@ func GetEndpoint(opts *api.HttpRule) Endpoint {
 	switch opt := opts.GetPattern().(type) {
 	case *api.HttpRule_Get:
 		return Endpoint{
-			Method: "MethodGet",
+			Method: http.MethodGet,
 			Path:   opt.Get,
 		}
 	case *api.HttpRule_Put:
 		return Endpoint{
-			Method: "MethodPut",
+			Method: http.MethodPut,
 			Path:   opt.Put,
 		}
 	case *api.HttpRule_Post:
 		return Endpoint{
-			Method: "MethodPost",
+			Method: http.MethodPost,
 			Path:   opt.Post,
 		}
 	case *api.HttpRule_Delete:
 		return Endpoint{
-			Method: "MethodDelete",
+			Method: http.MethodDelete,
 			Path:   opt.Delete,
 		}
 	case *api.HttpRule_Patch:
 		return Endpoint{
-			Method: "MethodPatch",
+			Method: http.MethodPatch,
 			Path:   opt.Patch,
 		}
 	}
