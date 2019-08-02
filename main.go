@@ -16,7 +16,8 @@ import (
 type Generator struct {
 	*generator.Generator
 	generator.PluginImports
-	overwrite bool
+	overwrite  bool
+	strconvPkg generator.Single
 }
 
 func NewGenerator() *Generator {
@@ -43,6 +44,7 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 	jsonPkg := g.NewImport("encoding/json")
 	//fmtPkg := g.NewImport("fmt")
 	ctxPkg := g.NewImport("context")
+	g.strconvPkg = g.NewImport("strconv")
 
 	for _, svc := range file.Service {
 		svcName := *svc.Name + "HttpClient"
@@ -97,7 +99,7 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 				if len(fields) > 0 {
 					g.P("q := request.URL.Query()")
 					for _, field := range fields {
-						g.P(`q.Add("`, field.GetJsonName(), `", in.`, strings.Title(field.GetName()), `)`)
+						g.queryAdd(field)
 					}
 					g.P("request.URL.RawQuery = q.Encode()")
 				}
@@ -116,6 +118,37 @@ func (g *Generator) Generate(file *generator.FileDescriptor) {
 			g.P("}")
 		}
 	}
+}
+
+func (g *Generator) queryAdd(field *descriptor.FieldDescriptorProto) {
+	// if in.Number != 0 {
+	//		q.Add("number", strconv.Itoa(in.Number))
+	//	}
+	var check string
+	var convert string
+	endConvert := ")"
+	switch *field.Type {
+	case descriptor.FieldDescriptorProto_TYPE_STRING:
+		check = `""`
+	case descriptor.FieldDescriptorProto_TYPE_INT32, descriptor.FieldDescriptorProto_TYPE_INT64:
+		check = `0`
+		convert = g.strconvPkg.Use() + ".Itoa("
+	case descriptor.FieldDescriptorProto_TYPE_FLOAT, descriptor.FieldDescriptorProto_TYPE_DOUBLE:
+		check = `0`
+		convert = g.strconvPkg.Use() + ".FormatFloat("
+		endConvert = ", 'f', 64)"
+	default:
+		check = `""`
+	}
+	g.P("if in.", strings.Title(field.GetName()), " != ", check, " {")
+	g.In()
+	value := convert + "in." + strings.Title(field.GetName())
+	if convert != "" {
+		value += endConvert
+	}
+	g.P(`q.Add("`, field.GetJsonName(), `", `, value, ")")
+	g.Out()
+	g.P("}")
 }
 
 func (g *Generator) getFields(msgType string, object generator.Object) []*descriptor.FieldDescriptorProto {
